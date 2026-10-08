@@ -16,13 +16,17 @@ This repository does not edit provider-wide instruction files automatically. Kee
 2. If it has no manifest, use `encargado init` or the Phoenix example. Register the whole project inventory: project purpose, service purposes/roles, scope, dependencies, ports, startup command, readiness, and URL aliases. Include databases and workers even when they do not have URLs.
 3. Default dependencies to worktree scope. Use project scope only when the project intentionally shares the service/data; the main checkout owns its canonical recipe.
 4. Configure Phoenix to read the allocated loopback port and exact public origins. Configure Compose to use the generated port variables and namespaced storage. Read `docs/phoenix.md` and `docs/manifest.md`.
-5. Run `encargado register --json` from this checkout. After manifest changes, register again. Do not edit the host registry file directly.
+5. Run `encargado register --json` from this checkout. If Mise's project environment calls `encargado get`, bootstrap a fresh worktree with `MISE_NO_ENV=1 encargado register --json` so the tool's shim can run before those facts exist. After manifest changes, register again. Do not edit the host registry file directly.
 6. Use `encargado context --json` or `encargado get <service>.ports.<name>` / `get <service>.urls.<alias>` for project environment loaders. These are read-only, secret-free facts available during startup; register before invoking a loader in a new checkout. Inspect `encargado status --json`. For dependencies alone, use `encargado deps up --json`. For normal development, use `encargado dev web --json` (substitute the registered name); this registers, exposes declared private URLs, starts the dependency graph, and verifies HTTP/WebSockets. Use `--local` to skip new exposure. `up web` remains the lower-level start operation.
 7. For a remote URL, configure the gateway once as documented, then run `encargado expose web --json` while the app is stopped, followed by `up`. Retrieve the assigned URL with `encargado urls --json`; never invent the hostname.
 8. Run `encargado verify web --json`. Check the public HTTP response and configured WebSocket probe. If none is configured, report that fact and test LiveView/hot reload in the browser when relevant.
 9. Report the registered project/checkout, services started, and working URLs. If local startup succeeded but routing failed, report both states and the concrete route error.
 
 Commands default to the current directory; `--path /absolute/checkout` is available from elsewhere. `status --all --json` maps every registered project. If the daemon is unavailable, follow the README's foreground/service setup rather than spawning duplicate daemons.
+
+For T3 Code project actions and worktree creation/deletion, follow
+[the T3 Code guide](t3-code.md). Run the stop action before removing a checkout;
+thread archival and deletion do not stop Encargado services automatically.
 
 ## Ownership and cleanup
 

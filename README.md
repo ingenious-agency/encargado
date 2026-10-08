@@ -62,7 +62,7 @@ Use [the Phoenix/PostgreSQL example](examples/phoenix) when adding Encargado to 
 cd ~/Work/Projects/my-app
 encargado init
 # Edit encargado.json; configure dependency ports and Phoenix as documented.
-encargado register
+MISE_NO_ENV=1 encargado register
 encargado deps up
 # Prepare application dependencies/database using the project's documented workflow.
 encargado dev web
@@ -72,6 +72,11 @@ encargado urls
 `init` writes a minimal web-service manifest and refuses to overwrite a file. It does not configure Phoenix or add PostgreSQL automatically. After editing an existing manifest, run `register` again. Registration is idempotent, and a failed validation preserves the previous registry.
 
 Each new worktree runs `register` from its own checkout. Worktree-scoped services get distinct host ports, Compose project names, and named volumes. Ports remain stable while a service remains registered.
+
+If Mise's project environment calls `encargado get`, bootstrap a fresh checkout
+with `MISE_NO_ENV=1 encargado register`. This skips Mise environment loading for
+that command so registration can happen first. Subsequent Mise commands load the
+registered values normally.
 
 `dev` registers the checkout, ensures its declared private HTTPS aliases, starts
 its dependency graph and verifies HTTP/WebSockets, retrying URL readiness within
@@ -95,6 +100,10 @@ encargado deps stop
 ~~~
 
 Stopping workloads leaves dependencies running. Stopping dependencies retains containers and data. Shared services require an explicit `stop <name>` and cannot be stopped while a running registered service depends on them.
+
+For T3 Code, follow the [configuration and usage guide](docs/t3-code.md) to add
+an automatic worktree preparation action and a manual stop action, find them in
+Settings, and clean up a checkout before deleting its worktree.
 
 ## Phoenix and loopback
 
@@ -144,6 +153,7 @@ Compose starts use `--no-recreate`. Existing containers retain their original im
 
 ## Clients and development
 
+- [T3 Code configuration, actions and worktree cleanup](docs/t3-code.md)
 - [Manifest and environment contract](docs/manifest.md)
 - [Sereno/control API](docs/api.md)
 - [Shared agent instructions](docs/agent-instructions.md)

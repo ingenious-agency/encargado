@@ -98,7 +98,18 @@ run = ["mix local.setup", "mix phx.server"]
 ~~~
 
 Register the checkout before Mise resolves these lookups, including before
-`mise install` in a fresh checkout. A dotenv value can use
+`mise install` in a fresh checkout:
+
+~~~sh
+MISE_NO_ENV=1 encargado register
+~~~
+
+The command-scoped `MISE_NO_ENV` bypasses project environment loading even when
+`encargado` itself is a Mise shim. The Encargado launcher also resolves a Mise
+Node shim without loading project environment. Normal Mise tasks and managed
+application recipes still load their environment after registration.
+
+A dotenv value can use
 `${ENCARGADO_POSTGRES_DATABASE_PORT}`. Keep private files ignored; version the
 mapping in Mise or a dotenv template. An optional shared private file outside Git
 can be loaded by the project before a checkout-specific override, avoiding secret

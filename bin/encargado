@@ -1,2 +1,10 @@
 #!/bin/sh
-exec node "$(dirname "$(readlink -f "$0")")/../src/cli.ts" "$@"
+encargado_node=$(command -v node) || { echo "Encargado requires Node.js >=24.12.0 on PATH." >&2; exit 127; }
+encargado_runtime=$(readlink -f "$encargado_node")
+# Resolve Mise's Node shim without project [env] lookups, which may need the
+# registration this CLI is about to create. Keep normal environment loading for
+# managed application recipes.
+case "$encargado_runtime" in
+  */mise) encargado_node=$("$encargado_runtime" --no-env which node) || exit "$?" ;;
+esac
+exec "$encargado_node" "$(dirname "$(readlink -f "$0")")/../src/cli.ts" "$@"
