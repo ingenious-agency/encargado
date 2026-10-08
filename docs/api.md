@@ -16,7 +16,7 @@ curl --unix-socket "$XDG_RUNTIME_DIR/encargado/control.sock" \
 | GET | `/v1/context` | `path`, optional dotted service `key`; registered facts without runtime probes |
 | GET | `/v1/status` | Optional `path` query: checkout or a directory within it |
 | GET | `/v1/verify` | `path`, optional `service` |
-| GET | `/v1/logs` | `path` and `service` |
+| GET | `/v1/logs` | `path`, `service`, optional `lines` (0–10000, default 100), `follow=true` |
 | GET | `/v1/routes` | None; inspect existing Tailscale routes |
 | POST | `/v1/dev` | `path`, optional `service`, relative `manifest`, `local: true` |
 | POST | `/v1/register` | `path`, optional relative `manifest` |
@@ -29,9 +29,45 @@ curl --unix-socket "$XDG_RUNTIME_DIR/encargado/control.sock" \
 
 POST bodies are JSON objects. Paths must be absolute. Registration resolves the Git checkout root, while other operations find the closest registered checkout containing the supplied path.
 
-Mutations are serialized. Startup waits for dependencies and readiness; use a suitably long client timeout. A failed startup returns an error and leaves diagnostics in the registry. Refresh status after an error because dependencies may already be running. Repeating register/up/stop is safe; there are no operation IDs or event streams in v0.1.
+Mutations are serialized. Startup waits for dependencies and readiness; use a suitably long client timeout. A failed startup returns an error and leaves diagnostics in the registry. Refresh status after an error because dependencies may already be running. Repeating register/up/stop is safe; there are no operation IDs or lifecycle event streams.
 
-General API calls with a browser `Origin` header are rejected. The socket grants the same authority as the local user, so expose it only through a trusted client. Logs are bounded to recent output but may include application-generated secrets.
+General API calls with a browser `Origin` header are rejected. The socket grants the same authority as the local user, so expose it only through a trusted client. Log snapshots are bounded to recent output but may include application-generated secrets.
+
+## Service logs
+
+`GET /v1/logs?path=...&service=web` returns `{ "logs": "..." }` with recent
+output from that checkout's registered systemd unit or exact owned Compose
+containers. `lines` controls the initial history per reader, including zero.
+Log reads and subscriptions are independent of the lifecycle mutation queue.
+
+With `follow=true`, the response is HTTP 200 with
+`Content-Type: application/x-ndjson`. Each newline-terminated JSON frame contains
+one complete log line (or a final partial line when a reader exits):
+
+~~~json
+{"logs":"application started\n"}
+{"logs":"request completed\n"}
+~~~
+
+The initial history is followed by new stdout/stderr output. Multiple owned
+containers are followed concurrently; their combined output has no global
+ordering guarantee. Output uses backpressure and line-based redaction, with a
+64 KiB limit per source line. A reader failure after headers have been sent emits
+an `{ "error": "...", "status": 500 }` frame and closes the stream. Input and
+ownership lookup errors before streaming use the usual JSON error response.
+
+Disconnecting cancels the subscription and terminates its log-reader processes.
+It never stops the application or dependency. Systemd follows the same unit
+across application restarts; Docker follows the containers selected when the
+subscription opens. All readers finishing, or daemon shutdown, closes the
+stream. Clients reconnect explicitly after shutdown or container replacement.
+
+~~~sh
+curl --no-buffer --unix-socket "$XDG_RUNTIME_DIR/encargado/control.sock" \
+  --get --data-urlencode "path=$PWD" --data-urlencode "service=web" \
+  --data-urlencode "follow=true" --data-urlencode "lines=50" \
+  http://localhost/v1/logs
+~~~
 
 ## Project configuration lookups
 

@@ -3,9 +3,11 @@ import { mkdir, writeFile, access } from "node:fs/promises";
 import { join, resolve, basename } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
+import { once } from "node:events";
 import { settings } from "./settings.ts";
 import { Manager } from "./manager.ts";
-import { Daemon, client } from "./server.ts";
+import { Daemon, client, followLogs } from "./server.ts";
+import { logLineCount } from "./logs.ts";
 import { run, checked, slug, redact } from "./util.ts";
 import { Problem } from "./model.ts";
 
@@ -28,7 +30,7 @@ const help = [
   "encargado verify [service]        Check local/public HTTP and configured WebSockets",
   "encargado expose <service>        Register named Tailscale URLs before app startup",
   "encargado unexpose <service>      Retire stopped-service routes; retain tailnet DNS definition",
-  "encargado logs <service>          Read recent logs",
+  "encargado logs <service>          Read recent logs; --follow streams new output",
   "encargado discover               Read existing Tailscale routes",
   "encargado reconcile              Refresh runtime state and routes",
   "encargado unregister              Remove a stopped checkout registration; retain data",
@@ -38,6 +40,8 @@ const help = [
   "--json                           Machine-readable output",
   "--local                          dev: skip creating tailnet URLs; retain existing ones",
   "--all                            All registered projects (status/urls only)",
+  "--follow, -f                     logs: follow new output until Ctrl+C",
+  "--lines <count>, -n              logs: initial lines (default 100; 0–10000)",
   "ENCARGADO_HOME                    Alternate private state/runtime directory",
   "ENCARGADO_SOCKET                  Control socket; injected into managed recipes",
   "ENCARGADO_PORT                    Local start-page port (default 17870)",
@@ -46,12 +50,34 @@ async function main() {
   const { values, positionals } = parseArgs({ allowPositionals: true, options: {
     help: { type: "boolean", short: "h" }, json: { type: "boolean" }, all: { type: "boolean" },
     path: { type: "string" }, manifest: { type: "string" }, local: { type: "boolean" },
+    follow: { type: "boolean", short: "f" }, lines: { type: "string", short: "n" },
   } });
   if (values.help || !positionals.length) { console.log(help); return; }
   const config = await settings(), path = resolve(values.path ?? process.cwd());
   const [command, arg, extra] = positionals;
   if (extra) throw new Problem("Unexpected argument: " + extra);
   if (values.local && command !== "dev") throw new Problem("--local applies only to dev");
+  if (values.follow && command !== "logs") throw new Problem("--follow applies only to logs");
+  if (values.lines !== undefined && command !== "logs") throw new Problem("--lines applies only to logs");
+  if (command === "logs" && arg && values.follow) {
+    const lines = logLineCount(values.lines), controller = new AbortController(), cancel = () => controller.abort();
+    let outputError: NodeJS.ErrnoException | undefined;
+    const failed = (error: NodeJS.ErrnoException) => { outputError = error; cancel(); };
+    for (const signal of ["SIGINT", "SIGTERM"] as const) process.once(signal, cancel);
+    process.stdout.on("error", failed);
+    try {
+      const query = new URLSearchParams({ path, service: arg, follow: "true", lines: String(lines) });
+      for await (const line of followLogs(config.socket, "/v1/logs?" + query, controller.signal)) {
+        if (!process.stdout.write(values.json ? JSON.stringify({ logs: line }) + "\n" : line)) await once(process.stdout, "drain", { signal: controller.signal });
+      }
+    } catch (error) { if (!controller.signal.aborted) throw error; }
+    finally {
+      controller.abort(); process.stdout.removeListener("error", failed);
+      for (const signal of ["SIGINT", "SIGTERM"] as const) process.removeListener(signal, cancel);
+    }
+    if (outputError && outputError.code !== "EPIPE") throw outputError;
+    return;
+  }
   if (command === "daemon") {
     const daemon = new Daemon(new Manager(config, run));
     const listening = await daemon.start();
@@ -99,7 +125,7 @@ async function main() {
     result = await client(config.socket, "GET", "/v1/status" + query);
     if (command === "urls") result = result.services.flatMap((s: any) => s.urls.map((u: any) => ({ service: s.id, name: s.name, ...u, ready: s.observed.ready, routeError: s.routeError })));
   } else if (["expose", "unexpose"].includes(command) && arg) result = await post(command, { service: arg });
-  else if (command === "logs" && arg) result = await client(config.socket, "GET", "/v1/logs?path=" + encodeURIComponent(path) + "&service=" + encodeURIComponent(arg));
+  else if (command === "logs" && arg) result = await client(config.socket, "GET", "/v1/logs?" + new URLSearchParams({ path, service: arg, lines: String(logLineCount(values.lines)) }));
   else if (command === "discover") result = await client(config.socket, "GET", "/v1/routes");
   else if (["unregister", "reconcile"].includes(command)) result = await post(command);
   else throw new Problem("Unknown command. Run encargado --help.");

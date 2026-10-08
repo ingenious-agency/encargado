@@ -42,6 +42,7 @@ export interface Settings {
 export interface Command { file: string; args: string[]; cwd?: string; env?: NodeJS.ProcessEnv; timeout?: number }
 export interface CommandResult { code: number; stdout: string; stderr: string }
 export type Runner = (command: Command) => Promise<CommandResult>;
+export type StreamRunner = (command: Command, signal: AbortSignal) => AsyncIterable<string>;
 export class Problem extends Error {
   status: number;
   constructor(message: string, status = 400) { super(message); this.status = status; }

@@ -2,8 +2,9 @@ import { mkdir, readFile } from "node:fs/promises";
 import { resolve, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseEnv } from "node:util";
-import { Problem, type Service, type Registry, type Runner, type Settings, type Command } from "./model.ts";
+import { Problem, type Service, type Registry, type Runner, type StreamRunner, type Settings, type Command } from "./model.ts";
 import { checked, atomicJson, redact } from "./util.ts";
+import { streamCommand, mergeLogCommands } from "./logs.ts";
 import { projectFile, contained } from "./manifest.ts";
 
 export interface Observation { state: "running" | "stopped" | "failed" | "unknown"; ready: boolean; reason?: string }
@@ -12,7 +13,8 @@ export interface Driver {
   start(service: Service, state: Registry): Promise<void>;
   stop(service: Service, state: Registry): Promise<void>;
   observe(service: Service, state: Registry): Promise<Observation>;
-  logs(service: Service, state: Registry): Promise<string>;
+  logs(service: Service, state: Registry, lines?: number): Promise<string>;
+  followLogs(service: Service, state: Registry, signal: AbortSignal, lines?: number): Promise<AsyncIterable<string>>;
 }
 export const portVariable = (service: string, port: string) => "ENCARGADO_" + service.replaceAll("-", "_").toUpperCase() + "_" + port.toUpperCase() + "_PORT";
 export async function environment(service: Service, state: Registry, settings: Settings): Promise<NodeJS.ProcessEnv> {
@@ -50,8 +52,8 @@ export async function environment(service: Service, state: Registry, settings: S
   return env;
 }
 export class SystemdDriver implements Driver {
-  runner: Runner; settings: Settings;
-  constructor(runner: Runner, settings: Settings) { this.runner = runner; this.settings = settings; }
+  runner: Runner; settings: Settings; streamRunner: StreamRunner;
+  constructor(runner: Runner, settings: Settings, streamRunner: StreamRunner = streamCommand) { this.runner = runner; this.settings = settings; this.streamRunner = streamRunner; }
   async validate(service: Service, state: Registry) { await environment(service, state, this.settings); }
   async start(service: Service, state: Registry) {
     const launchFile = join(this.settings.stateDir, "launch", service.id + ".json");
@@ -92,13 +94,20 @@ export class SystemdDriver implements Driver {
     }
     return { state: "unknown", ready: false, reason: fields.ActiveState ?? "No systemd state" };
   }
-  async logs(service: Service) {
-    return redact(await checked(this.runner, { file: "journalctl", args: ["--user", "--unit", service.unit, "--lines", "100", "--no-pager", "--output=short-iso"] }));
+  async logs(service: Service, _state: Registry, lines = 100) {
+    return redact(await checked(this.runner, this.logCommand(service, lines)));
+  }
+  logCommand(service: Service, lines: number): Command {
+    return { file: "journalctl", args: ["--user", "--unit", service.unit, "--lines", String(lines), "--no-pager", "--output=short-iso"] };
+  }
+  async followLogs(service: Service, _state: Registry, signal: AbortSignal, lines = 100) {
+    const command = this.logCommand(service, lines); command.args.push("--follow");
+    return this.streamRunner(command, signal);
   }
 }
 export class ComposeDriver implements Driver {
-  runner: Runner; settings: Settings;
-  constructor(runner: Runner, settings: Settings) { this.runner = runner; this.settings = settings; }
+  runner: Runner; settings: Settings; streamRunner: StreamRunner;
+  constructor(runner: Runner, settings: Settings, streamRunner: StreamRunner = streamCommand) { this.runner = runner; this.settings = settings; this.streamRunner = streamRunner; }
   async command(service: Service, state: Registry, args: string[]): Promise<Command> {
     const files = await Promise.all(service.spec.files!.map(file => projectFile(service.cwd, file)));
     return { file: "docker", cwd: service.cwd, env: { ...await environment(service, state, this.settings), COMPOSE_IGNORE_ORPHANS: "true" },
@@ -166,9 +175,15 @@ export class ComposeDriver implements Driver {
       return { state: "failed", ready: false, reason: "Compose containers are not all running" };
     } catch { return { state: "unknown", ready: false, reason: "Docker status unavailable" }; }
   }
-  async logs(service: Service) {
+  async logs(service: Service, _state: Registry, lines = 100) {
     const containers = await this.containers(service);
-    const logs = await Promise.all(containers.map(c => this.runner({ file: "docker", args: ["logs", "--tail", "100", c.id] })));
-    return redact(logs.map(r => r.stdout + r.stderr).join("\n"));
+    const logs = await Promise.all(containers.map(c => this.runner({ file: "docker", args: ["logs", "--tail", String(lines), c.id] })));
+    for (const result of logs) if (result.code) throw new Problem("Cannot read Docker logs: " + redact(result.stderr).slice(0, 2000));
+    return redact(logs.map(result => result.stdout + result.stderr).join("\n"));
+  }
+  async followLogs(service: Service, _state: Registry, signal: AbortSignal, lines = 100) {
+    const containers = await this.containers(service);
+    if (!containers.length) throw new Problem("No owned containers exist for " + service.name, 404);
+    return mergeLogCommands(containers.map(c => ({ file: "docker", args: ["logs", "--tail", String(lines), "--follow", c.id] })), this.streamRunner, signal);
   }
 }

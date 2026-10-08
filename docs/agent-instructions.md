@@ -30,7 +30,7 @@ thread archival and deletion do not stop Encargado services automatically.
 
 ## Ownership and cleanup
 
-Use `encargado logs <service>` and observed state to diagnose failures. Do not kill a process because it occupies an expected port, reset the shared gateway, or run an unscoped `docker compose down`.
+Use `encargado logs <service>` and observed state to diagnose failures. Add `--follow` (`-f`) to watch new output and `--lines <count>` (`-n`) to select initial history (default 100; zero shows only new output). Ctrl+C ends the subscription without stopping the service. `--follow --json` emits newline-delimited JSON log records. Do not kill a process because it occupies an expected port, reset the shared gateway, or run an unscoped `docker compose down`.
 
 Stop workloads with `encargado stop`, private dependencies with `encargado deps stop`, and a shared dependency explicitly by name once no running consumer needs it. Data is retained. Do not delete volumes or application data as part of routine cleanup.
 

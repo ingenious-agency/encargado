@@ -1,5 +1,6 @@
 import { createServer, request, type IncomingMessage, type ServerResponse, type Server } from "node:http";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { once } from "node:events";
 import { mkdir, chmod, open, readFile, rm, stat } from "node:fs/promises";
 import { dirname, join, isAbsolute } from "node:path";
 import { Problem } from "./model.ts";
@@ -29,10 +30,42 @@ export function client(socket: string, method: string, path: string, data?: unkn
     req.end(data === undefined ? undefined : JSON.stringify(data));
   });
 }
+export async function* followLogs(socket: string, path: string, signal: AbortSignal): AsyncIterable<string> {
+  if (signal.aborted) return;
+  const req = request({ socketPath: socket, method: "GET", path, signal });
+  const response = new Promise<IncomingMessage>((resolve, reject) => { req.once("response", resolve); req.on("error", reject); });
+  req.setTimeout(15000, () => req.destroy(new Error("Encargado log request timed out")));
+  req.end();
+  try {
+    const res = await response; req.setTimeout(0);
+    if ((res.statusCode ?? 500) >= 400) {
+      const value = JSON.parse(await body(res)); throw new Problem(value.error ?? "Encargado log request failed", res.statusCode);
+    }
+    if (!res.headers["content-type"]?.startsWith("application/x-ndjson")) throw new Problem("Expected an Encargado log stream");
+    res.setEncoding("utf8");
+    let pending = "";
+    for await (const chunk of res) {
+      pending += chunk;
+      let newline: number;
+      while ((newline = pending.indexOf("\n")) >= 0) {
+        if (newline > 1024 * 1024) throw new Problem("Encargado log stream frame is too large");
+        const frame = JSON.parse(pending.slice(0, newline)); pending = pending.slice(newline + 1);
+        if (typeof frame.error === "string") throw new Problem(frame.error, frame.status ?? 500);
+        if (typeof frame.logs !== "string") throw new Problem("Invalid Encargado log stream frame");
+        yield frame.logs;
+      }
+      if (pending.length > 1024 * 1024) throw new Problem("Encargado log stream frame is too large");
+    }
+    if (pending) throw new Problem("Incomplete Encargado log stream frame");
+  } catch (error) {
+    if (!signal.aborted) throw error instanceof Problem ? error : new Problem("Encargado log stream failed: " + (error as Error).message);
+  } finally { req.destroy(); }
+}
 export class Daemon {
   manager: Manager; control: Server; web: Server;
   secret = randomBytes(32); timer?: NodeJS.Timeout; closing = false; reconciling = false;
   lockToken = process.pid + ":" + randomBytes(8).toString("hex"); ownsLock = false;
+  logStreams = new Map<AbortController, Promise<void>>();
   constructor(manager: Manager) {
     this.manager = manager;
     this.control = createServer((req, res) => { void this.api(req, res).catch(error => json(res, error instanceof Problem ? error.status : 500, { error: redact(error.message) })); });
@@ -62,7 +95,13 @@ export class Daemon {
     else if (req.method === "GET" && url.pathname === "/v1/context") result = url.searchParams.has("key") ? await this.manager.get(needPath(), url.searchParams.get("key")!) : await this.manager.configuration(needPath());
     else if (req.method === "GET" && url.pathname === "/v1/verify") result = await this.manager.verify(needPath(), name ?? undefined);
     else if (req.method === "GET" && url.pathname === "/v1/routes") result = await this.manager.routes.discover();
-    else if (req.method === "GET" && url.pathname === "/v1/logs") result = { logs: await this.manager.drivers[this.manager.service(await this.manager.context(needPath()), named()).spec.driver].logs(this.manager.service(await this.manager.context(needPath()), named()), this.manager.state) };
+    else if (req.method === "GET" && url.pathname === "/v1/logs") {
+      const follow = url.searchParams.get("follow");
+      if (follow !== null && follow !== "true" && follow !== "false") throw new Problem("follow must be true or false");
+      const lines = url.searchParams.get("lines") ?? undefined;
+      if (follow === "true") { await this.streamLogs(res, needPath(), named(), lines); return; }
+      result = { logs: await this.manager.logs(needPath(), named(), lines) };
+    }
     else if (req.method === "POST" && url.pathname === "/v1/register") result = await this.manager.register(needPath(), data.manifest);
     else if (req.method === "POST" && url.pathname === "/v1/dev") result = await this.manager.dev(needPath(), { service: name ?? undefined, manifest: data.manifest, local: data.local });
     else if (req.method === "POST" && url.pathname === "/v1/up") result = await this.manager.up(needPath(), { service: name ?? undefined, depsOnly: data.depsOnly === true });
@@ -73,6 +112,33 @@ export class Daemon {
     else if (req.method === "POST" && url.pathname === "/v1/reconcile") { await this.manager.reconcile(); result = await this.manager.inventory(); }
     else throw new Problem("Unknown API operation", 404);
     json(res, 200, result);
+  }
+  async streamLogs(res: ServerResponse, path: string, name: string, lines?: unknown) {
+    if (this.closing) throw new Problem("Encargado is shutting down", 503);
+    const controller = new AbortController(), cancel = () => controller.abort();
+    let complete!: () => void;
+    this.logStreams.set(controller, new Promise<void>(resolve => { complete = resolve; }));
+    res.once("close", cancel);
+    try {
+      const logs = await this.manager.followLogs(path, name, controller.signal, lines);
+      if (controller.signal.aborted) return;
+      res.setTimeout(0);
+      res.writeHead(200, { "Content-Type": "application/x-ndjson", "Cache-Control": "no-store" });
+      res.flushHeaders();
+      for await (const line of logs) {
+        if (controller.signal.aborted) break;
+        if (!res.write(JSON.stringify({ logs: redact(line) }) + "\n")) await once(res, "drain", { signal: controller.signal });
+      }
+    } catch (error) {
+      if (!controller.signal.aborted && !res.destroyed) {
+        if (!res.headersSent) throw error;
+        res.end(JSON.stringify({ error: redact((error as Error).message), status: error instanceof Problem ? error.status : 500 }) + "\n");
+      }
+    } finally {
+      controller.abort(); res.removeListener("close", cancel);
+      if (res.headersSent && !res.destroyed && !res.writableEnded) res.end();
+      this.logStreams.delete(controller); complete();
+    }
   }
   token(service: string, origin: string) {
     const payload = Buffer.from(JSON.stringify({ service, origin, expires: Date.now() + 10 * 60 * 1000 })).toString("base64url");
@@ -173,6 +239,9 @@ export class Daemon {
   }
   async close() {
     this.closing = true; if (this.timer) clearInterval(this.timer);
+    const streams = [...this.logStreams];
+    for (const [controller] of streams) controller.abort();
+    await Promise.all(streams.map(([_controller, complete]) => complete));
     await Promise.all([this.web, this.control].map(server => new Promise<void>(resolve => { server.close(() => resolve()); server.closeIdleConnections(); })));
     if (this.ownsLock) {
       await this.manager.queue.execute(async () => {});

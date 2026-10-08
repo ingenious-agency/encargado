@@ -95,6 +95,8 @@ creating registrations or exporting secrets. See [the API](docs/api.md).
 encargado status --json
 encargado status --all --json
 encargado logs web
+encargado logs web --follow
+encargado logs postgres -f --lines 50
 encargado stop
 encargado deps stop
 ~~~
@@ -104,6 +106,16 @@ Stopping workloads leaves dependencies running. Stopping dependencies retains co
 For T3 Code, follow the [configuration and usage guide](docs/t3-code.md) to add
 an automatic worktree preparation action and a manual stop action, find them in
 Settings, and clean up a checkout before deleting its worktree.
+
+`logs <service>` reads the current checkout's registered systemd unit or owned
+Compose containers. It returns the latest 100 lines by default; `--lines` (`-n`)
+accepts 0–10000 lines per log reader. `--follow` (`-f`) streams subsequent output;
+use `--lines 0` to start with new output only. Ctrl+C disconnects and stops the
+log readers while leaving application services and containers running.
+`--follow --json` emits newline-delimited JSON records, each with a `logs` string.
+Systemd following continues across application restarts in the same unit. Docker
+following ends when the selected containers' log readers end; rerun the command
+after container replacement. Daemon shutdown closes log streams.
 
 ## Phoenix and loopback
 

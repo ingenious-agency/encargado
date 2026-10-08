@@ -6,6 +6,7 @@ import { loadManifest, contained } from "./manifest.ts";
 import { ComposeDriver, SystemdDriver, type Driver, type Observation } from "./drivers.ts";
 import { TailscaleRoutes, type Routes } from "./routes.ts";
 import { httpStatus, websocketUpgrade } from "./probe.ts";
+import { logLineCount } from "./logs.ts";
 
 export class Manager {
   settings: Settings; runner: Runner; state: Registry; drivers: Record<string, Driver>; routes: Routes;
@@ -129,6 +130,14 @@ export class Manager {
     const id = checkout.services[name];
     if (!id) throw new Problem("Unknown service in this checkout: " + name, 404);
     return this.state.services[id];
+  }
+  async logs(path: string, name: string, lines?: unknown) {
+    const count = logLineCount(lines), service = this.service(await this.context(path), name);
+    return this.drivers[service.spec.driver].logs(service, this.state, count);
+  }
+  async followLogs(path: string, name: string, signal: AbortSignal, lines?: unknown) {
+    const count = logLineCount(lines), service = this.service(await this.context(path), name);
+    return this.drivers[service.spec.driver].followLogs(service, this.state, signal, count);
   }
   async probe(service: Service): Promise<boolean> {
     if (!service.spec.ready) return true;

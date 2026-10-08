@@ -35,7 +35,13 @@ export class FakeDriver implements Driver {
     this.states.set(service.id, { state: "stopped", ready: false });
   }
   async observe(service: Service) { return this.states.get(service.id) ?? { state: "stopped" as const, ready: false }; }
-  async logs() { return "fixture log"; }
+  async logs(_service: Service, _state: Registry, _lines = 100) { return "fixture log"; }
+  async followLogs(_service: Service, _state: Registry, signal: AbortSignal, _lines = 100): Promise<AsyncIterable<string>> {
+    return (async function* () {
+      yield "fixture log\n";
+      if (!signal.aborted) await new Promise<void>(resolve => signal.addEventListener("abort", () => resolve(), { once: true }));
+    })();
+  }
   async close() { await Promise.all([...this.servers.values()].map(server => new Promise<void>(resolve => { server.close(() => resolve()); server.closeAllConnections(); }))); this.servers.clear(); }
 }
 export class FakeRoutes implements Routes {
