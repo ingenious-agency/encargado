@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "project": {
+    "name": "my-app",
+    "description": "Phoenix application with a database per worktree"
+  },
+  "services": {
+    "postgres": {
+      "driver": "compose",
+      "role": "dependency",
+      "scope": "worktree",
+      "purpose": "Development PostgreSQL database",
+      "files": ["compose.yaml"],
+      "environmentFiles": [".env.local"],
+      "ports": {"database": 5432}
+    },
+    "web": {
+      "driver": "elixir",
+      "role": "workload",
+      "scope": "worktree",
+      "purpose": "Phoenix web application",
+      "dependsOn": ["postgres"],
+      "command": ["mise", "exec", "--", "mix", "phx.server"],
+      "environmentFiles": [".env.local"],
+      "environment": {
+        "DATABASE_URL": "ecto://postgres:${POSTGRES_PASSWORD}@127.0.0.1:${ENCARGADO_POSTGRES_DATABASE_PORT}/app_dev"
+      },
+      "ports": {"http": 4000},
+      "ready": {"path": "/", "statuses": [200], "timeout": 90},
+      "urls": ["web"]
+    }
+  }
+}

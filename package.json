@@ -1,0 +1,19 @@
+{
+  "name": "encargado",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A worktree-aware development environment manager for Linux",
+  "type": "module",
+  "license": "MIT",
+  "engines": { "node": ">=24.12.0" },
+  "bin": { "encargado": "bin/encargado" },
+  "files": ["bin", "src", "README.md", "docs", "examples"],
+  "scripts": {
+    "start": "node src/cli.ts",
+    "check": "tsc --noEmit",
+    "test": "node --test --test-concurrency=1 test/*.test.ts",
+    "test:live": "node --test test/live/*.test.ts",
+    "test:phoenix": "node --test test/phoenix.test.integration.ts"
+  },
+  "devDependencies": { "@types/node": "^24.10.0", "typescript": "^5.9.3" }
+}

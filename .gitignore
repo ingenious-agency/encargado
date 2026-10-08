@@ -1,0 +1,8 @@
+node_modules/
+_build/
+deps/
+coverage/
+.env*
+!.env.example
+*.tgz
+.encargado/
