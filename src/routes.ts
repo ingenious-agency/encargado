@@ -7,6 +7,15 @@ export interface Routes {
   remove(service: Service): Promise<void>;
   discover(): Promise<unknown>;
 }
+function checkManagedRoute(endpoint: Endpoint, current: any) {
+  if (!endpoint.serviceName.startsWith("svc:enc-")) throw new Problem("Refusing to manage a Service outside Encargado's namespace");
+  if (!current) return;
+  const hosts = Object.keys(current.Web ?? {});
+  if (hosts.some(host => host !== endpoint.hostname + ":443") || Object.keys(current.TCP ?? {}).some(port => port !== "443") ||
+    hosts.some(host => Object.keys(current.Web[host].Handlers ?? {}).some(path => path !== "/")) || current.Tun) {
+    throw new Problem("Existing Tailscale Service has additional routes; inspect it before changing ownership");
+  }
+}
 export class TailscaleRoutes implements Routes {
   settings: Settings; runner: Runner;
   provisioned = new Map<string, number>();
@@ -61,17 +70,13 @@ export class TailscaleRoutes implements Routes {
     }
     const existing = ts.serveConfigFile ? await readJson(ts.serveConfigFile) : JSON.parse(await this.command(["serve", "status", "--json"]));
     const before = JSON.stringify(existing);
+    for (const endpoint of service.endpoints) checkManagedRoute(endpoint, existing.Services?.[endpoint.serviceName]);
     for (const endpoint of service.endpoints) {
       if (!endpoint.serviceName.startsWith("svc:enc-")) throw new Problem("Refusing to manage a Service outside Encargado's namespace");
       const current = existing.Services?.[endpoint.serviceName];
       if (current?.AllowFunnel && Object.values(current.AllowFunnel).some(Boolean)) throw new Problem("Managed development Services cannot enable Funnel");
       // Reconcile only the exact registered service. Never reset or replace all Serve configuration.
       const config = { TCP: { "443": { HTTPS: true } }, Web: { [endpoint.hostname + ":443"]: { Handlers: { "/": { Proxy: target } } } } };
-      if (current && JSON.stringify(current) !== JSON.stringify(config)) {
-        const hosts = Object.keys(current.Web ?? {});
-        if (hosts.some(host => host !== endpoint.hostname + ":443") || Object.keys(current.TCP ?? {}).some(port => port !== "443") ||
-          hosts.some(host => Object.keys(current.Web[host].Handlers ?? {}).some(path => path !== "/"))) throw new Problem("Existing Tailscale Service has additional routes; inspect it before changing ownership");
-      }
       if (ts.serveConfigFile) {
         existing.Services ??= {};
         existing.Services[endpoint.serviceName] = config;
@@ -86,16 +91,22 @@ export class TailscaleRoutes implements Routes {
     for (const endpoint of service.endpoints) await this.command(["serve", "advertise", endpoint.serviceName]);
   }
   async remove(service: Service) {
+    if (!service.endpoints.length) return;
     const ts = this.settings.tailscale;
     if (!ts) throw new Problem("Tailscale settings are unavailable");
+    const readConfig = async () => ts.serveConfigFile ? await readJson(ts.serveConfigFile) : JSON.parse(await this.command(["serve", "status", "--json"]));
+    const existing = await readConfig(), before = JSON.stringify(existing);
+    // Check every alias before draining any of them: another route may have
+    // been added to a registered Service since its last reconciliation.
+    for (const endpoint of service.endpoints) checkManagedRoute(endpoint, existing.Services?.[endpoint.serviceName]);
+    for (const endpoint of service.endpoints) await this.command(["serve", "drain", endpoint.serviceName]);
+    if (ts.serveConfigFile) {
+      if (JSON.stringify(await readConfig()) !== before) throw new Problem("Gateway configuration changed concurrently; retry removal");
+      for (const endpoint of service.endpoints) delete existing.Services?.[endpoint.serviceName];
+      if (JSON.stringify(existing) !== before) await atomicJson(ts.serveConfigFile, existing);
+    }
     for (const endpoint of service.endpoints) {
-      if (!endpoint.serviceName.startsWith("svc:enc-")) throw new Problem("Refusing to remove an unrelated route");
-      await this.command(["serve", "drain", endpoint.serviceName]);
-      if (ts.serveConfigFile) {
-        const config = await readJson(ts.serveConfigFile);
-        delete config.Services?.[endpoint.serviceName];
-        await atomicJson(ts.serveConfigFile, config);
-      }
+      if (!ts.serveConfigFile) checkManagedRoute(endpoint, (await readConfig()).Services?.[endpoint.serviceName]);
       await this.command(["serve", "clear", endpoint.serviceName]);
     }
   }

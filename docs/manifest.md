@@ -79,6 +79,8 @@ Shared services read files from the main checkout and can reference only the sha
 
 Use generated host-port variables in Compose and bind published ports to `127.0.0.1`. Use ordinary named volumes without an explicit global name, or bind within the checkout/`ENCARGADO_DATA_DIR`.
 
+Bind sources must remain inside those directories after resolving symlinks, including existing ancestors of paths Compose will create. Dangling symlinks are rejected. Named volumes must use the default `local` driver without `driver_opts`; use a bind mount for a host directory so its location can be validated. Custom volume drivers are not supported.
+
 The manager rejects fixed/global container names, host networking, privileged/host process namespaces, external volumes/networks, and published ports that do not match the registration. Each service is started by name with `--no-deps`; any Compose `depends_on` entries must also appear in the manifest and use the same scope. Encargado controls dependency ordering.
 
 The selected Compose service is validated at registration and before starting. Do not run the same managed recipe with a plain `docker compose up`: that uses a different project name and lacks Encargado's allocated environment.

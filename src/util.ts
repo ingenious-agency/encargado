@@ -11,7 +11,11 @@ export const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(res
 export function redact(value: string): string {
   return value.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "")
     .replace(/(https?:\/\/|postgres(?:ql)?:\/\/|ecto:\/\/)[^\s/@]+:[^\s/@]+@/gi, "$1[redacted]@")
-    .replace(/((?:password|secret|token|api[_-]?key|authorization)[\w-]*["']?\s*[:=]\s*)[^\s,;]+/gi, "$1[redacted]");
+    // An unquoted Authorization value includes both its scheme and credential.
+    .replace(/(authorization["']?[ \t]*[:=][ \t]*)(?:Bearer|Basic)[ \t]+[^\s,;]+/gi, "$1[redacted]")
+    // Keep quoted values together, including escaped quotes and truncated lines.
+    .replace(/((?:password|secret|token|api[_-]?key|authorization)[\w-]*["']?[ \t]*[:=][ \t]*)("(?:\\[^\r\n]|[^"\\\r\n])*(?:"|\\?(?=\r?$))|'(?:\\[^\r\n]|[^'\\\r\n])*(?:'|\\?(?=\r?$))|[^\s,;]+)/gim,
+      (_match, key: string, secret: string) => key + (secret.startsWith('"') ? '"[redacted]"' : secret.startsWith("'") ? "'[redacted]'" : "[redacted]"));
 }
 export async function atomicJson(path: string, value: unknown) {
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });

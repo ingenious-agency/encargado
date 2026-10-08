@@ -42,7 +42,7 @@ This format has top-level `TCP`, `Web`, and `Services` keys. It differs from the
 
 Treat Encargado as the sole active writer of that file while running. An optimistic change check reduces accidental overwrites, but is not a cross-process file lock. Keep persistent production entries under their existing source-control workflow; coordinate changes with the daemon stopped. In CLI mode, coordinate other writers to the same Service names as well.
 
-Encargado never invokes `serve reset` or a global `set-config --all`. A managed Service with extra paths/ports is rejected instead of silently replacing those routes. Discovery reads the gateway's Serve status; it does not adopt existing services or discover every port on the machine.
+Encargado never invokes `serve reset` or a global `set-config --all`. A managed Service with extra paths, ports, hostnames, or L3 forwarding is rejected before its routes are changed or removed. `unexpose` checks every alias before draining any of them and retains the registration if removal fails. Restore the intended configuration or move unrelated routes to their own Service before retrying. Discovery reads the gateway's Serve status; it does not adopt existing services or discover every port on the machine.
 
 ## Register Service definitions
 

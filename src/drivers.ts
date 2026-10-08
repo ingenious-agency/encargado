@@ -1,5 +1,5 @@
-import { mkdir, readFile } from "node:fs/promises";
-import { resolve, join } from "node:path";
+import { lstat, mkdir, readFile, realpath } from "node:fs/promises";
+import { basename, dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseEnv } from "node:util";
 import { Problem, type Service, type Registry, type Runner, type StreamRunner, type Settings, type Command } from "./model.ts";
@@ -17,6 +17,22 @@ export interface Driver {
   followLogs(service: Service, state: Registry, signal: AbortSignal, lines?: number): Promise<AsyncIterable<string>>;
 }
 export const portVariable = (service: string, port: string) => "ENCARGADO_" + service.replaceAll("-", "_").toUpperCase() + "_" + port.toUpperCase() + "_PORT";
+// Compose can create a missing bind source. Resolve its existing ancestors too,
+// but never treat a dangling symlink as a directory that is safe to create.
+async function mountPath(path: string): Promise<string> {
+  try { return await realpath(path); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    const entry = await lstat(path).catch(error => {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      return undefined;
+    });
+    if (entry?.isSymbolicLink()) throw new Problem("Compose bind mount contains a dangling symlink");
+    const parent = dirname(path);
+    if (parent === path) throw error;
+    return join(await mountPath(parent), basename(path));
+  }
+}
 export async function environment(service: Service, state: Registry, settings: Settings): Promise<NodeJS.ProcessEnv> {
   const env: NodeJS.ProcessEnv = {};
   for (const key of ["PATH", "HOME", "USER", "LOGNAME", "LANG", "SHELL", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS", "MISE_DATA_DIR", "MISE_CONFIG_DIR"]) {
@@ -128,10 +144,19 @@ export class ComposeDriver implements Driver {
       throw new Problem(service.name + ": Compose ports must bind 127.0.0.1 and use the allocated ENCARGADO_<SERVICE>_<PORT>_PORT variables");
     }
     for (const mount of selected.volumes ?? []) {
-      if (mount.type === "bind" && !contained(service.cwd, mount.source) && !contained(service.dataDir, mount.source)) throw new Problem(service.name + ": bind mount is outside its checkout/data directory: " + mount.target);
+      if (mount.type === "bind") {
+        const outside = () => new Problem(service.name + ": bind mount is outside its checkout/data directory: " + mount.target);
+        if (typeof mount.source !== "string" || !isAbsolute(mount.source) ||
+          (!contained(service.cwd, mount.source) && !contained(service.dataDir, mount.source))) throw outside();
+        const [source, checkout, data] = await Promise.all([mountPath(mount.source), mountPath(service.cwd), mountPath(service.dataDir)]);
+        if (!contained(checkout, source) && !contained(data, source)) throw outside();
+      }
       if (mount.type === "volume") {
         const volume = config.volumes?.[mount.source];
         if (volume?.external || (volume?.name && !volume.name.startsWith(service.composeProject + "_"))) throw new Problem(service.name + ": volume must be namespaced by its Compose project");
+        if ((volume?.driver && volume.driver !== "local") || Object.keys(volume?.driver_opts ?? {}).length) {
+          throw new Problem(service.name + ": use ordinary local volumes without driver_opts, or a bind mount inside the checkout/data directory");
+        }
       }
     }
     for (const network of Object.keys(selected.networks ?? {})) {
