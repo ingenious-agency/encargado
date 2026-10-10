@@ -1,7 +1,9 @@
 import { createServer, request, type IncomingMessage, type ServerResponse, type Server } from "node:http";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { once } from "node:events";
-import { mkdir, chmod, open, readFile, rm, stat } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
+import { constants } from "node:fs";
+import { mkdir, chmod, open, rm, stat, type FileHandle } from "node:fs/promises";
 import { dirname, join, isAbsolute } from "node:path";
 import { Problem } from "./model.ts";
 import { Manager } from "./manager.ts";
@@ -65,6 +67,7 @@ export class Daemon {
   manager: Manager; control: Server; web: Server;
   secret = randomBytes(32); timer?: NodeJS.Timeout; closing = false; reconciling = false;
   lockToken = process.pid + ":" + randomBytes(8).toString("hex"); ownsLock = false;
+  lockFile?: FileHandle;
   logStreams = new Map<AbortController, Promise<void>>();
   constructor(manager: Manager) {
     this.manager = manager;
@@ -203,18 +206,34 @@ export class Daemon {
   async lock(): Promise<void> {
     const path = join(this.manager.settings.stateDir, "daemon.lock");
     await mkdir(this.manager.settings.stateDir, { recursive: true, mode: 0o700 });
-    try { const file = await open(path, "wx", 0o600); await file.writeFile(this.lockToken); await file.close(); this.ownsLock = true; }
-    catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      const owner = await readFile(path, "utf8");
-      const pid = Number(owner.split(":")[0]);
-      if (!Number.isInteger(pid) || pid < 1) throw new Problem("Invalid daemon lock; inspect " + path);
-      try { process.kill(pid, 0); } catch (err) {
-        if ((err as NodeJS.ErrnoException).code === "ESRCH") { await rm(path); return this.lock(); }
-        throw err;
+    const file = await open(path, constants.O_CREAT | constants.O_RDWR | constants.O_NOFOLLOW, 0o600);
+    try {
+      const info = await file.stat();
+      if (!info.isFile() || info.uid !== process.getuid!() || (info.mode & 0o077)) throw new Problem("Daemon lock must be a private regular file owned by this user");
+      // flock locks the inherited open file description. Keeping our descriptor
+      // open retains the lock after flock exits; process exit releases it. Never
+      // unlink this inode, including during crash recovery or normal shutdown.
+      const acquired = spawnSync("flock", ["--exclusive", "--nonblock", "3"], { stdio: ["ignore", "ignore", "pipe", file.fd], timeout: 5000 });
+      if (acquired.error) throw new Problem("Cannot acquire daemon lock; install util-linux flock: " + acquired.error.message);
+      if (acquired.status === 1) throw new Problem("Encargado is already running");
+      if (acquired.status !== 0) throw new Problem("Cannot acquire daemon lock: " + redact(acquired.stderr?.toString() ?? "flock failed"));
+      // An older daemon uses a PID file without flock. Refuse to take over while
+      // that process is alive; an old crash record can be overwritten in place.
+      const owner = await file.readFile("utf8");
+      if (owner) {
+        const pid = Number(owner.split(":")[0]);
+        if (!Number.isInteger(pid) || pid < 1) throw new Problem("Invalid daemon lock; inspect " + path);
+        let alive = true;
+        try { process.kill(pid, 0); } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+          alive = false;
+        }
+        if (alive) throw new Problem("Encargado is already running (PID " + pid + ")");
       }
-      throw new Problem("Encargado is already running (PID " + pid + ")");
-    }
+      await file.truncate(0);
+      await file.write(this.lockToken, 0, "utf8");
+      this.lockFile = file; this.ownsLock = true;
+    } catch (error) { await file.close(); throw error; }
   }
   async start() {
     await this.lock();
@@ -244,11 +263,13 @@ export class Daemon {
     await Promise.all(streams.map(([_controller, complete]) => complete));
     await Promise.all([this.web, this.control].map(server => new Promise<void>(resolve => { server.close(() => resolve()); server.closeIdleConnections(); })));
     if (this.ownsLock) {
-      await this.manager.queue.execute(async () => {});
-      await rm(this.manager.settings.socket, { force: true });
-      const path = join(this.manager.settings.stateDir, "daemon.lock");
-      if (await readFile(path, "utf8").catch(() => "") === this.lockToken) await rm(path, { force: true });
-      this.ownsLock = false;
+      try {
+        await this.manager.queue.execute(async () => {});
+        await rm(this.manager.settings.socket, { force: true });
+      } finally {
+        try { await this.lockFile!.truncate(0); }
+        finally { await this.lockFile!.close(); this.lockFile = undefined; this.ownsLock = false; }
+      }
     }
   }
 }

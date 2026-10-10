@@ -4,7 +4,7 @@ Encargado makes Elixir/Phoenix development environments repeatable on one Linux 
 
 ## Development
 
-Use Linux, Node.js 24.12 or newer, and npm:
+Use Linux, Node.js 24.12 or newer, npm, and util-linux `flock`:
 
 ```sh
 npm ci --ignore-scripts

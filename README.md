@@ -29,7 +29,7 @@ A checked-in `encargado.json` declares intent. A private host registry stores re
 ## Requirements
 
 - Linux with an active systemd user manager, Git, and `ss` from iproute2.
-- Node.js 24.12 or later; npm for development dependencies.
+- Node.js 24.12 or later; npm for development dependencies, and util-linux `flock` for the daemon lock.
 - Docker Engine with Compose v2 or later for Compose services, accessible by your user.
 - Elixir/Erlang and the project's toolchain, normally through mise.
 - Tailscale Services support on a host with access to this machine's loopback network, for remote URLs.
@@ -179,7 +179,7 @@ Default locations:
 
 If XDG_RUNTIME_DIR is unavailable, a UID-specific directory under the system temporary directory is used. `ENCARGADO_HOME=/absolute/path` overrides both state and runtime directories. `ENCARGADO_PORT` overrides the landing port. Keep that port fixed for persistent local URLs.
 
-The daemon serializes mutations and uses atomic registry writes plus a single-instance lock. Its socket and launch recipes are private to the local user. Resolved launch recipes may contain environment-file secrets; protect the state directory and its backups. API inventory omits environment values and command arguments; application logs can still contain application-generated secrets.
+The daemon serializes mutations and uses atomic registry writes plus a kernel-held single-instance lock. The `daemon.lock` file stays in place after shutdown; the kernel releases its lock when the daemon exits, including after a crash. Do not delete it while a daemon is running. Stop older daemons before upgrading. Its socket and launch recipes are private to the local user. Resolved launch recipes may contain environment-file secrets; protect the state directory and its backups. API inventory omits environment values and command arguments; application logs can still contain application-generated secrets.
 
 Applications and containers survive an Encargado daemon restart. On restart, Encargado observes their owners and restores routing. It does not automatically restart crashed applications or replay all starts after a host reboot. Compose restart policy remains a property of the project's Compose file.
 
