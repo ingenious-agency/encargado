@@ -7,4 +7,10 @@ encargado_runtime=$(readlink -f "$encargado_node")
 case "$encargado_runtime" in
   */mise) encargado_node=$("$encargado_runtime" --no-env which node) || exit "$?" ;;
 esac
-exec "$encargado_node" "$(dirname "$(readlink -f "$0")")/../src/cli.ts" "$@"
+encargado_root=$(dirname "$(readlink -f "$0")")/..
+# Checkouts run source directly; release packages contain compiled JavaScript
+# because Node does not strip TypeScript inside node_modules.
+if [ -f "$encargado_root/src/cli.ts" ]; then
+  exec "$encargado_node" "$encargado_root/src/cli.ts" "$@"
+fi
+exec "$encargado_node" "$encargado_root/dist/cli.js" "$@"
