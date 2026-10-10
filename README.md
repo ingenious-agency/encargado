@@ -11,9 +11,13 @@ I built it to manage more than twenty projects on a remote development machine. 
 
 The scope is deliberately narrow: Elixir/Phoenix applications on Linux, mise for the toolchain, Docker Compose for dependencies, systemd for application ownership, and optional Tailscale routing for private HTTPS URLs. Those choices give projects a common set of conventions and keep everyday operations repeatable. Each project supplies its setup tasks and private environment files.
 
-Encargado manages the environments. Sereno is a client for seeing and operating them. The CLI gives developers and coding agents access to the same manager operations, so a project follows the same lifecycle whichever interface starts it.
-
 Once a project is configured and registered, you can return to it, inspect its state, start its services, open its URL, and stop your work through the same commands. Worktrees follow that contract too, with separate ports and data by default and explicitly shared dependencies where needed. Stopping services preserves their data.
+
+## Use Encargado with Sereno
+
+Encargado manages the environments. [Sereno](https://github.com/ingenious-agency/sereno) is a terminal interface for seeing and operating them. The CLI gives developers and coding agents access to the same manager operations, so a project follows the same lifecycle whichever interface starts it.
+
+Once you have registered an application, follow [Sereno's getting started guide](https://github.com/ingenious-agency/sereno#getting-started) to browse its project and worktree groups, inspect services and URLs, and run their available actions. Sereno also discovers other host resources independently. You can use Encargado through its CLI without installing Sereno.
 
 ## What it owns
 
