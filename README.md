@@ -1,8 +1,19 @@
 # Encargado
 
-Encargado is a host service that registers projects, Git worktrees, services, dependencies, and development URLs. It starts Compose dependencies and Elixir/Phoenix applications, waits for readiness, and maintains private Tailscale routes. Sereno and coding agents are clients of the same manager.
+[![CI](https://github.com/ingenious-agency/encargado/actions/workflows/ci.yml/badge.svg)](https://github.com/ingenious-agency/encargado/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-This initial implementation runs on Linux, uses systemd user units to own application processes, and has no runtime npm dependencies. The registry and control API are implemented in TypeScript; Elixir/Phoenix is the supported application launcher.
+**Make your development machine predictable.**
+
+Encargado gives your projects a consistent way to start, inspect, and stop. It keeps track of their services, dependencies, ports, and development URLs so the procedure stays familiar as you move between projects.
+
+I built it to manage more than twenty projects on a remote development machine. Remembering how each environment starts, which services are still running, and what can be stopped becomes work of its own. Encargado captures those operating instructions in a versioned project recipe and keeps the machine's registered state in one place.
+
+The scope is deliberately narrow: Elixir/Phoenix applications on Linux, mise for the toolchain, Docker Compose for dependencies, systemd for application ownership, and optional Tailscale routing for private HTTPS URLs. Those choices give projects a common set of conventions and keep everyday operations repeatable. Each project supplies its setup tasks and private environment files.
+
+Encargado manages the environments. Sereno is a client for seeing and operating them. The CLI gives developers and coding agents access to the same manager operations, so a project follows the same lifecycle whichever interface starts it.
+
+Once a project is configured and registered, you can return to it, inspect its state, start its services, open its URL, and stop your work through the same commands. Worktrees follow that contract too, with separate ports and data by default and explicitly shared dependencies where needed. Stopping services preserves their data.
 
 ## What it owns
 
@@ -25,15 +36,28 @@ A checked-in `encargado.json` declares intent. A private host registry stores re
 
 ## Run it
 
+Download `encargado-0.1.1.tgz` and `SHA256SUMS` from the [latest release](https://github.com/ingenious-agency/encargado/releases/latest), then:
+
 ~~~sh
-cd ~/Work/Projects/encargado
-npm ci
+sha256sum --check SHA256SUMS
+npm install --global ./encargado-0.1.1.tgz --ignore-scripts
+encargado daemon
+~~~
+
+Release packages contain compiled JavaScript and have no runtime npm dependencies. Use version 0.1.1 or later; the original 0.1.0 package cannot run from an npm installation.
+
+To run from source:
+
+~~~sh
+git clone https://github.com/ingenious-agency/encargado.git
+cd encargado
+npm ci --ignore-scripts
 npm run check
 npm test
 ./bin/encargado daemon
 ~~~
 
-The daemon prints its Unix socket and local start-page port. In another terminal, use `~/Work/Projects/encargado/bin/encargado`, or optionally run `npm link` once to make `encargado` available on PATH.
+The daemon prints its Unix socket and local start-page port. From a source checkout, use `./bin/encargado`, or optionally run `npm link` once to make `encargado` available on PATH.
 
 With Mise, a global npm link belongs to one Node installation. To keep the CLI
 available when projects switch Node versions, link it from your user bin directory
@@ -41,7 +65,7 @@ instead (that directory must be on PATH, and projects still need Node 24.12+):
 
 ~~~sh
 mkdir -p ~/.local/bin
-ln -s ~/Work/Projects/encargado/bin/encargado ~/.local/bin/encargado
+ln -s "$(pwd)/bin/encargado" ~/.local/bin/encargado
 ~~~
 
 For a persistent user service:
@@ -52,7 +76,7 @@ systemctl --user status encargado
 journalctl --user -u encargado
 ~~~
 
-Stop a foreground daemon before installing the user service. Installation writes `~/.config/systemd/user/encargado.service`, using this checkout and the current Node executable/PATH. Keep the checkout at the same location; rerun installation after moving it or replacing Node. User lingering is a separate host choice if it must run without a login session.
+Stop a foreground daemon before installing the user service. Installation writes `~/.config/systemd/user/encargado.service`, using this installation and the current Node executable/PATH. Keep the installation at the same location; rerun installation after moving it or replacing Node. Restart the user service after upgrading Encargado. User lingering is a separate host choice if it must run without a login session.
 
 ## Register and run an application
 
@@ -165,6 +189,8 @@ Compose starts use `--no-recreate`. Existing containers retain their original im
 
 ## Clients and development
 
+The registry and control API are implemented in TypeScript, with no runtime npm dependencies.
+
 - [T3 Code configuration, actions and worktree cleanup](docs/t3-code.md)
 - [Manifest and environment contract](docs/manifest.md)
 - [Sereno/control API](docs/api.md)
@@ -176,6 +202,7 @@ Agent instructions are provided as a portable document and an always-loaded refe
 ~~~sh
 npm run check
 npm test
+npm run test:package
 npm run test:live
 npm run test:phoenix
 ~~~
@@ -186,3 +213,7 @@ Real tailnet DNS, certificate issuance, service approval, and remote Start acces
 
 Tests use isolated fixtures in a shared port range; test files run sequentially,
 while lifecycle concurrency is exercised explicitly within their tests.
+
+The package test builds and installs a release in a temporary directory, then checks the installed CLI and application launcher without creating host services. CI runs type checks, the default suite, and this package check on the minimum and current Node.js 24 releases.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development and release instructions, and [SECURITY.md](SECURITY.md) for private vulnerability reporting. Encargado is available under the [MIT license](LICENSE).

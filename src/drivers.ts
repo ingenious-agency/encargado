@@ -77,7 +77,8 @@ export class SystemdDriver implements Driver {
     await checked(this.runner, {
       file: "systemd-run", args: ["--user", "--quiet", "--collect", "--service-type=exec", "--expand-environment=no",
         "--unit=" + service.unit, "--property=KillMode=control-group", "--property=TimeoutStopSec=20",
-        "--property=Restart=no", "--", process.execPath, fileURLToPath(new URL("./launch.ts", import.meta.url)), launchFile],
+        "--property=Restart=no", "--", process.execPath,
+        fileURLToPath(new URL(import.meta.url.endsWith(".ts") ? "./launch.ts" : "./launch.js", import.meta.url)), launchFile],
     });
   }
   async stop(service: Service) {
