@@ -1,6 +1,6 @@
 import { realpath, stat, mkdir } from "node:fs/promises";
 import { resolve, join } from "node:path";
-import { Problem, emptyRegistry, type Registry, type Settings, type Runner, type Service, type Checkout } from "./model.ts";
+import { Problem, emptyRegistry, type Registry, type Settings, type Runner, type Service, type Checkout, type Endpoint } from "./model.ts";
 import { atomicJson, canBind, checked, hash, Queue, readJson, redact, sleep } from "./util.ts";
 import { loadManifest, contained } from "./manifest.ts";
 import { ComposeDriver, SystemdDriver, type Driver, type Observation } from "./drivers.ts";
@@ -174,6 +174,24 @@ export class Manager {
     } catch (error) { return { state: "unknown", ready: false, reason: redact((error as Error).message) }; }
   }
   localUrl(service: Service) { return "http://127.0.0.1:" + this.landingPort + "/s/" + service.id; }
+  private exposureEndpoints(service: Service) {
+    // URLs belong to the registration, including legacy hashed hostnames.
+    return service.endpoints.length ? service.endpoints : this.routes.endpoints(service, this.state.projects[service.projectId].name);
+  }
+  private async checkExposures(exposures: { service: Service; endpoints: Endpoint[] }[]) {
+    const planned = new Map(exposures.map(({ service, endpoints }) => [service.id, endpoints]));
+    const owners = new Map<string, Service>();
+    for (const service of Object.values(this.state.services)) {
+      for (const endpoint of planned.get(service.id) ?? service.endpoints) {
+        for (const key of [endpoint.hostname, endpoint.serviceName]) {
+          const owner = owners.get(key);
+          if (owner) throw new Problem("URL name collision: " + endpoint.hostname + " is already registered to " + owner.name + " in " + owner.cwd + "; choose a different worktree directory, project name, or URL alias", 409);
+          owners.set(key, service);
+        }
+      }
+    }
+    await this.routes.checkAvailable(exposures.filter(({ service }) => !service.endpoints.length).flatMap(({ endpoints }) => endpoints));
+  }
   async route(service: Service, ready: boolean) {
     try {
       await this.routes.apply(service, ready ? "http://127.0.0.1:" + service.ports.http : "http://127.0.0.1:" + this.landingPort);
@@ -237,8 +255,9 @@ export class Manager {
       if (!targets.length) throw new Problem("No matching services are registered in this checkout");
       // Compute every requested exposure before making any lifecycle changes.
       const exposures = options.local ? [] : targets.filter(service => service.spec.urls.length).map(service => ({
-        service, endpoints: this.routes.endpoints(service, this.state.projects[checkout.projectId].name),
+        service, endpoints: this.exposureEndpoints(service),
       }));
+      if (exposures.length) await this.checkExposures(exposures);
       for (const { service, endpoints } of exposures) {
         if (JSON.stringify(service.endpoints) !== JSON.stringify(endpoints)) {
           if ((await this.observe(service)).state !== "stopped") throw new Problem(service.name + ": stop the service before adding/changing its URLs", 409);
@@ -296,7 +315,9 @@ export class Manager {
       const checkout = await this.context(path), service = this.service(checkout, name);
       if (!service.spec.urls.length) throw new Problem("This service has no HTTP URL aliases");
       if ((await this.observe(service)).state !== "stopped") throw new Problem("Expose URLs before starting the app, so Phoenix receives the correct origins", 409);
-      service.endpoints = this.routes.endpoints(service, this.state.projects[checkout.projectId].name);
+      const endpoints = this.exposureEndpoints(service);
+      await this.checkExposures([{ service, endpoints }]);
+      service.endpoints = endpoints;
       await this.save();
       await this.route(service, false); await this.save();
       return this.inventory(checkout);

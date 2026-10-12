@@ -53,7 +53,11 @@ With no API credential configured, create the deterministic named Services throu
 3. Create those Services accepting `tcp:443`, with the intended tags/access policy, and approve the gateway's advertisements.
 4. Run `encargado reconcile`, start the app, then `encargado verify web`.
 
-The Service name is derived from project name, alias, and service identity. Its hash distinguishes worktrees. DNS provisioning and approval may take time; a registration is not a connectivity test.
+New Service names use `svc:enc-<project>-<alias>-<worktree>`, with the worktree directory name as the final component. Names are lowercased, non-DNS characters become hyphens, and project/alias/worktree components are limited to 15/15/24 characters with leading/trailing hyphens removed. Directory names without usable characters become `project`. For example, project `my-app`, alias `web`, and directory `feature` produce `svc:enc-my-app-web-feature`. Project-scoped services use the main checkout's directory name even when exposed from a linked worktree.
+
+The URL belongs to the registered checkout and stays stable across commits, branch switches, detached HEAD, and daemon restarts. A directory name, normalization, or truncation collision is rejected; choose a different worktree directory, project name, or alias. Before claiming a new URL, Encargado also checks for existing gateway Services and hostnames and refuses to adopt them without the registration. DNS provisioning and approval may take time; a registration is not a connectivity test.
+
+Older hashed URLs remain registered until explicitly retired. That suffix hashes Encargado's service identity, which comes from repository/checkout paths and service name; it is not a Git commit SHA. To adopt the new naming, stop the app and run `unexpose`, then `expose` again. Create and approve the new Service as above before restarting the app, or use automatic definition creation. The old control-plane definition remains for explicit retirement by the tailnet administrator.
 
 Optional automatic definition creation uses:
 

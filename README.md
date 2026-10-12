@@ -164,11 +164,15 @@ encargado verify web
 encargado urls --json
 ~~~
 
-Each alias gets a deterministic, worktree-specific Tailscale Service hostname. Healthy services route directly to their allocated loopback port. Stopped or unhealthy services route to Encargado's landing page. Unknown addresses return 404; a known unavailable application returns 503 with a Start action for allowed users. Starting it launches the registered dependency graph and redirects once ready.
+Each alias gets a Tailscale Service hostname of the form `enc-<project>-<alias>-<worktree>.<tailnet>.ts.net`, using the worktree directory name. For example, alias `web` in project `my-app` and worktree directory `feature` gets `enc-my-app-web-feature.<tailnet>.ts.net`. Commits, branch changes, and detached HEAD do not change a registered URL. Project-scoped services use the main checkout's directory name. Names are normalized and shortened to fit DNS; collisions are rejected before exposure.
+
+Healthy services route directly to their allocated loopback port. Stopped or unhealthy services route to Encargado's landing page. Unknown addresses return 404; a known unavailable application returns 503 with a Start action for allowed users. Starting it launches the registered dependency graph and redirects once ready.
 
 There is also a stable localhost landing URL for each HTTP service. It works without Tailscale and redirects to the application's loopback port when ready. A localhost URL cannot be opened from another machine.
 
 Encargado reconciles runtime state and routes every five seconds. A crash can briefly leave the old upstream visible before reconciliation. URLs remain registered while an application is stopped. `unexpose <name>` retires a stopped application's gateway routes but retains its Tailscale control-plane definition.
+
+Existing URLs, including older hashed names, stay registered through `register`, `expose`, `dev`, and daemon restarts. To switch to the directory-based name, run `encargado stop web`, `encargado unexpose web`, then `encargado dev web` from that worktree. Provision and approve the new Tailscale Service if required by your gateway setup; see [Tailscale routing](docs/tailscale.md).
 
 ## State and lifecycle
 
