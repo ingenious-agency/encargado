@@ -19,5 +19,5 @@
     "test:live": "node --test test/live/*.test.ts",
     "test:phoenix": "node --test test/phoenix.test.integration.ts"
   },
-  "devDependencies": { "@types/node": "^24.10.0", "typescript": "^5.9.3" }
+  "devDependencies": { "@types/node": "^26.6.5", "typescript": "^5.9.3" }
 }
