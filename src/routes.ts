@@ -1,8 +1,10 @@
+import { basename } from "node:path";
 import { Problem, type Service, type Endpoint, type Settings, type Runner } from "./model.ts";
-import { atomicJson, checked, hash, readJson, slug } from "./util.ts";
+import { atomicJson, checked, readJson, slug } from "./util.ts";
 
 export interface Routes {
   endpoints(service: Service, projectName: string): Endpoint[];
+  checkAvailable(endpoints: Endpoint[]): Promise<void>;
   apply(service: Service, target: string): Promise<void>;
   remove(service: Service): Promise<void>;
   discover(): Promise<unknown>;
@@ -23,11 +25,27 @@ export class TailscaleRoutes implements Routes {
   endpoints(service: Service, projectName: string): Endpoint[] {
     const ts = this.settings.tailscale;
     if (!ts) throw new Problem("Configure tailscale.domain in Encargado settings before exposing URLs");
+    const part = (value: string, limit: number) => slug(value).slice(0, limit).replace(/^-+|-+$/g, "") || "project";
     return service.spec.urls.map(name => {
-      const label = "enc-" + slug(projectName).slice(0, 15) + "-" + slug(name).slice(0, 15) + "-" + hash(service.id + name).slice(0, 10);
+      const label = "enc-" + part(projectName, 15) + "-" + part(name, 15) + "-" + part(basename(service.cwd), 24);
       const hostname = label + "." + ts.domain;
       return { name, serviceName: "svc:" + label, hostname, url: "https://" + hostname };
     });
+  }
+  private async readConfig() {
+    const ts = this.settings.tailscale;
+    if (!ts) throw new Problem("Tailscale settings are unavailable");
+    return ts.serveConfigFile ? await readJson(ts.serveConfigFile) : JSON.parse(await this.command(["serve", "status", "--json"]));
+  }
+  async checkAvailable(endpoints: Endpoint[]) {
+    if (!endpoints.length) return;
+    const config = await this.readConfig();
+    const hosts = [config, ...Object.values(config.Services ?? {})].flatMap((value: any) => Object.keys(value.Web ?? {}));
+    for (const endpoint of endpoints) {
+      if (Object.hasOwn(config.Services ?? {}, endpoint.serviceName) || hosts.some(host => host === endpoint.hostname || host.startsWith(endpoint.hostname + ":"))) {
+        throw new Problem("URL already exists in the Tailscale gateway without this registration: " + endpoint.hostname + "; choose a different worktree directory or project name", 409);
+      }
+    }
   }
   async command(args: string[]) {
     const prefix = this.settings.tailscale?.command ?? ["tailscale"];
@@ -68,7 +86,7 @@ export class TailscaleRoutes implements Routes {
       if (!endpoint.serviceName.startsWith("svc:enc-")) throw new Problem("Refusing to manage a Service outside Encargado's namespace");
       await this.provision(endpoint);
     }
-    const existing = ts.serveConfigFile ? await readJson(ts.serveConfigFile) : JSON.parse(await this.command(["serve", "status", "--json"]));
+    const existing = await this.readConfig();
     const before = JSON.stringify(existing);
     for (const endpoint of service.endpoints) checkManagedRoute(endpoint, existing.Services?.[endpoint.serviceName]);
     for (const endpoint of service.endpoints) {
@@ -94,19 +112,18 @@ export class TailscaleRoutes implements Routes {
     if (!service.endpoints.length) return;
     const ts = this.settings.tailscale;
     if (!ts) throw new Problem("Tailscale settings are unavailable");
-    const readConfig = async () => ts.serveConfigFile ? await readJson(ts.serveConfigFile) : JSON.parse(await this.command(["serve", "status", "--json"]));
-    const existing = await readConfig(), before = JSON.stringify(existing);
+    const existing = await this.readConfig(), before = JSON.stringify(existing);
     // Check every alias before draining any of them: another route may have
     // been added to a registered Service since its last reconciliation.
     for (const endpoint of service.endpoints) checkManagedRoute(endpoint, existing.Services?.[endpoint.serviceName]);
     for (const endpoint of service.endpoints) await this.command(["serve", "drain", endpoint.serviceName]);
     if (ts.serveConfigFile) {
-      if (JSON.stringify(await readConfig()) !== before) throw new Problem("Gateway configuration changed concurrently; retry removal");
+      if (JSON.stringify(await this.readConfig()) !== before) throw new Problem("Gateway configuration changed concurrently; retry removal");
       for (const endpoint of service.endpoints) delete existing.Services?.[endpoint.serviceName];
       if (JSON.stringify(existing) !== before) await atomicJson(ts.serveConfigFile, existing);
     }
     for (const endpoint of service.endpoints) {
-      if (!ts.serveConfigFile) checkManagedRoute(endpoint, (await readConfig()).Services?.[endpoint.serviceName]);
+      if (!ts.serveConfigFile) checkManagedRoute(endpoint, (await this.readConfig()).Services?.[endpoint.serviceName]);
       await this.command(["serve", "clear", endpoint.serviceName]);
     }
   }

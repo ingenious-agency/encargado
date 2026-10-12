@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { createServer, type Server } from "node:http";
 import { checked, run } from "../src/util.ts";
 import { Manager } from "../src/manager.ts";
-import type { Service, Settings, Registry } from "../src/model.ts";
+import type { Service, Settings, Registry, Endpoint } from "../src/model.ts";
 import type { Driver, Observation } from "../src/drivers.ts";
 import type { Routes } from "../src/routes.ts";
 
@@ -46,7 +46,8 @@ export class FakeDriver implements Driver {
 }
 export class FakeRoutes implements Routes {
   targets = new Map<string, string>(); fail = false;
-  endpoints(service: Service) { return service.spec.urls.map(name => ({ name, hostname: name + "-" + service.id + ".test.ts.net", serviceName: "svc:enc-" + service.id, url: "https://" + name + "-" + service.id + ".test.ts.net" })); }
+  endpoints(service: Service) { return service.spec.urls.map(name => ({ name, hostname: name + "-" + service.id + ".test.ts.net", serviceName: "svc:enc-" + service.id + "-" + name, url: "https://" + name + "-" + service.id + ".test.ts.net" })); }
+  async checkAvailable(_endpoints: Endpoint[]) {}
   async apply(service: Service, target: string) { if (this.fail) throw new Error("Route unavailable"); if (service.endpoints.length) this.targets.set(service.id, target); }
   async remove(service: Service) { this.targets.delete(service.id); }
   async discover() { return [...this.targets]; }

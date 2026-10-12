@@ -183,7 +183,7 @@ A lifecycle response can have HTTP 200 with a `routeError`: local startup may ha
     "websocketConfigured": true,
     "endpoints": [
       {
-        "url": "https://enc-my-app-web-HASH.example-tailnet.ts.net",
+        "url": "https://enc-my-app-web-feature.example-tailnet.ts.net",
         "status": 200,
         "ready": true,
         "websocket": true
